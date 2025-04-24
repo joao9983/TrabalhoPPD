@@ -12,7 +12,10 @@ lock = threading.Lock()
 
 def broadcast(msg):
     for client in clients:
-        client.send(msg.encode())
+        try:
+            client.send(msg.encode())
+        except:
+            pass
 
 def send_board():
     board_str = "\n".join(" ".join(row) for row in game.board)
@@ -27,7 +30,7 @@ def handle_client(conn, addr, player_id):
                 conn.send("Aguarde seu turno...\n".encode())
                 continue
 
-            conn.send("Seu turno! Digite o comando (ex: place x y OU move x1 y1 x2 y2):\n".encode())
+            conn.send("Seu turno! Digite o comando (ex: place y x OU move y1 x1 y2 x2):\n".encode())
         
         try:
             msg = conn.recv(1024).decode().strip()
@@ -43,6 +46,7 @@ def handle_client(conn, addr, player_id):
                     except ValueError:
                         conn.send("Comando inválido. Use: place x y\n".encode())
                         continue
+
                 elif msg.startswith("move"):
                     try:
                         _, x1, y1, x2, y2 = msg.split()
@@ -50,11 +54,11 @@ def handle_client(conn, addr, player_id):
                     except ValueError:
                         conn.send("Comando inválido. Use: move x1 y1 x2 y2\n".encode())
                         continue
+
                 elif msg.strip() in ["exit", "resign", "desistir"]:
                     broadcast(f"Jogador {player_symbols[player_id]} desistiu. Jogador {player_symbols[1 - player_id]} venceu!\n")
                     conn.send("Você desistiu da partida.\n".encode())
                     
-                    # Fecha todas as conexões
                     for c in clients:
                         try:
                             c.shutdown(socket.SHUT_RDWR)
@@ -64,12 +68,28 @@ def handle_client(conn, addr, player_id):
 
                     print(f"Jogador {player_symbols[player_id]} desistiu. Fim da partida.")
                     return
+
                 else:
                     conn.send("Comando inválido.\n".encode())
                     continue
 
                 broadcast(f"\n{response}")
                 send_board()
+
+                # ✅ Verifica vencedor apenas na fase de movimentação
+                if game.phase == 'movement':
+                    winner = game._check_winner()
+                    if winner:
+                        broadcast(f"\n🏁 Fim do jogo! Jogador {winner} venceu!\n")
+
+                        for c in clients:
+                            try:
+                                c.shutdown(socket.SHUT_RDWR)
+                                c.close()
+                            except:
+                                pass
+                        return
+
         except Exception as e:
             print(f"Erro com cliente {addr}: {e}")
             break
