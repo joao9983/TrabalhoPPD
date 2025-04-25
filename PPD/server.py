@@ -30,7 +30,7 @@ def handle_client(conn, addr, player_id):
                 conn.send("Aguarde seu turno...\n".encode())
                 continue
 
-            conn.send("Seu turno! Digite o comando (ex: place y x OU move y1 x1 y2 x2):\n".encode())
+            conn.send("Seu turno! Digite o comando (ex: place x y OU move x1 y1 x2 y2):\n".encode())
         
         try:
             msg = conn.recv(1024).decode().strip()
@@ -58,7 +58,7 @@ def handle_client(conn, addr, player_id):
                 elif msg.strip() in ["exit", "resign", "desistir"]:
                     broadcast(f"Jogador {player_symbols[player_id]} desistiu. Jogador {player_symbols[1 - player_id]} venceu!\n")
                     conn.send("Você desistiu da partida.\n".encode())
-                    
+
                     for c in clients:
                         try:
                             c.shutdown(socket.SHUT_RDWR)
@@ -76,19 +76,19 @@ def handle_client(conn, addr, player_id):
                 broadcast(f"\n{response}")
                 send_board()
 
-                # ✅ Verifica vencedor apenas na fase de movimentação
-                if game.phase == 'movement':
-                    winner = game._check_winner()
-                    if winner:
-                        broadcast(f"\n🏁 Fim do jogo! Jogador {winner} venceu!\n")
+                # ✅ Verificação de fim de jogo removida daqui!
+                # Agora o fim de jogo é tratado internamente no board.move_piece()
 
-                        for c in clients:
-                            try:
-                                c.shutdown(socket.SHUT_RDWR)
-                                c.close()
-                            except:
-                                pass
-                        return
+                # Se o move_piece ou place_piece detectou fim de jogo,
+                # ele já mandou no response — e podemos encerrar o servidor:
+                if "Fim do jogo!" in response:
+                    for c in clients:
+                        try:
+                            c.shutdown(socket.SHUT_RDWR)
+                            c.close()
+                        except:
+                            pass
+                    return
 
         except Exception as e:
             print(f"Erro com cliente {addr}: {e}")
