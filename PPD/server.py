@@ -1,6 +1,9 @@
 import socket
 import threading
+import time
+
 from game.board import Board
+
 
 HOST = 'localhost'
 PORT = 5555
@@ -24,14 +27,19 @@ def send_board():
 def handle_client(conn, addr, player_id):
     conn.send(f"Você é o jogador {player_symbols[player_id]}\n".encode())
 
-    while True:
-        with lock:
-            if game.current_player != player_symbols[player_id]:
-                conn.send("Aguarde seu turno...\n".encode())
-                continue
+     # Se não for o jogador inicial, avisa que está aguardando
+    if player_symbols[player_id] != game.current_player:
+        conn.send("Aguardue pelo outro jogador...\n".encode())
 
-            conn.send("Seu turno! Digite o comando (ex: place x y OU move x1 y1 x2 y2):\n".encode())
-        
+    while True:
+        # Aguarda o turno do jogador, mas sem spammar
+        while True:
+            with lock:
+                if game.current_player == player_symbols[player_id]:
+                    break
+            time.sleep(0.2)  # Espera um pouco antes de checar de novo
+
+        conn.send("Seu turno! Digite o comando (ex: place x y OU move x1 y1 x2 y2 OU chat mensagem):\n".encode())
         try:
             msg = conn.recv(1024).decode().strip()
             if not msg:
@@ -55,6 +63,21 @@ def handle_client(conn, addr, player_id):
                         conn.send("Comando inválido. Use: move x1 y1 x2 y2\n".encode())
                         continue
 
+                elif msg.startswith("chat "):
+                    chat_msg = msg[5:].strip()
+                    if chat_msg:
+                        # Envia para todos os outros clientes
+                        for idx, c in enumerate(clients):
+                            if idx != player_id:
+                                try:
+                                    c.send(f"[Chat] Jogador {player_symbols[player_id]}: {chat_msg}\n".encode())
+                                except:
+                                    pass
+                        conn.send("Mensagem enviada!\n".encode())
+                    else:
+                        conn.send("Mensagem de chat vazia.\n".encode())
+                    continue
+
                 elif msg.strip() in ["exit", "resign", "desistir"]:
                     broadcast(f"Jogador {player_symbols[player_id]} desistiu. Jogador {player_symbols[1 - player_id]} venceu!\n")
                     conn.send("Você desistiu da partida.\n".encode())
@@ -76,11 +99,6 @@ def handle_client(conn, addr, player_id):
                 broadcast(f"\n{response}")
                 send_board()
 
-                # ✅ Verificação de fim de jogo removida daqui!
-                # Agora o fim de jogo é tratado internamente no board.move_piece()
-
-                # Se o move_piece ou place_piece detectou fim de jogo,
-                # ele já mandou no response — e podemos encerrar o servidor:
                 if "Fim do jogo!" in response:
                     for c in clients:
                         try:

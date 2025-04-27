@@ -6,7 +6,6 @@ class Board:
     def __init__(self):
         self.size = 5
         self.board = [[self.EMPTY for _ in range(self.size)] for _ in range(self.size)]
-        #self.board[2][2] = ' '  # casa central vazia
         self.phase = 'placement'
         self.pieces = {self.PLAYER1: 0, self.PLAYER2: 0}
         self.max_pieces = 12
@@ -32,38 +31,46 @@ class Board:
 
         if self._placement_complete():
             self.phase = 'movement'
-
-        self._switch_turn()
-        return True, "Peça colocada com sucesso."
+            self.board[2][2] = self.EMPTY  # Desbloqueia a casa central
+            return True, "Fase de movimentação iniciada."
+        else:
+            self._switch_turn()
+            return True, "Peça colocada com sucesso."
 
     def move_piece(self, from_x, from_y, to_x, to_y):
+        # Checa se estamos na fase de movimentação
         if self.phase != 'movement':
             return False, "Ainda estamos na fase de colocação."
 
+        # Checa se as coordenadas estão no tabuleiro
         if not self._is_valid_cell(from_x, from_y) or not self._is_valid_cell(to_x, to_y):
             return False, "Posição fora do tabuleiro."
 
+        # Checa se a peça na origem é do jogador atual
         if self.board[from_y][from_x] != self.current_player:
             return False, "Você só pode mover suas próprias peças."
 
+        # Checa se a casa de destino está livre
         if self.board[to_y][to_x] != self.EMPTY:
             return False, "Destino inválido (não está vazio)."
 
+        # Checa se o movimento é para uma casa adjacente (sem diagonais)
         if not self._is_adjacent(from_x, from_y, to_x, to_y):
             return False, "Movimento deve ser para uma casa adjacente (sem diagonais)."
 
-        # Realiza o movimento
+        # Realiza o movimento: remove a peça da origem e coloca no destino
         self.board[to_y][to_x] = self.current_player
         self.board[from_y][from_x] = self.EMPTY
 
-        # Verifica captura
+        # Verifica se houve captura (remover peça adversária)
         self._check_captures(to_x, to_y)
 
-        # Verifica fim de jogo
+        # Verifica se o jogo acabou (por vitória ou falta de peças)
         winner, reason = self._check_winner()
         if winner:
-            return True, f"🏁 Fim do jogo! Jogador {winner} venceu! ({reason})"
+            return True, f"Jogador {winner} venceu! {reason} Fim do jogo!"
 
+        # Troca o turno para o outro jogador
         self._switch_turn()
         return True, "Movimento realizado com sucesso."
 
@@ -87,16 +94,18 @@ class Board:
 
     def _check_captures(self, x, y):
         opp = self.PLAYER2 if self.current_player == self.PLAYER1 else self.PLAYER1
-        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # esquerda, direita, cima, baixo
 
         for dx, dy in directions:
             nx = x + dx
             ny = y + dy
             px = x + 2 * dx
             py = y + 2 * dy
-            if self._in_bounds(px, py):
+
+            if self._in_bounds(nx, ny) and self._in_bounds(px, py):
                 if self.board[ny][nx] == opp and self.board[py][px] == self.current_player:
-                    self.board[ny][nx] = self.EMPTY  # captura
+                    self.board[ny][nx] = self.EMPTY  # Captura a peça adversária
+                    print(f"Captura realizada! Peça adversária removida de ({nx}, {ny})")
 
     def _check_winner(self):
         p1_moves = self._has_moves(self.PLAYER1)
@@ -133,9 +142,7 @@ class Board:
         for y in range(self.size):
             row = []
             for x in range(self.size):
-                if x == 2 and y == 2:
-                    row.append(' ')  # visualmente vazio
-                else:
-                    row.append(self.board[y][x])
+                # Implementar se necessário
+                pass
             result.append(" ".join(row))
         return "\n".join(result)
