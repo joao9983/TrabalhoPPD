@@ -98,8 +98,12 @@ class SeegaClient:
     def send_chat(self):
         msg = self.entry_chat.get().strip()
         if msg:
-            self.send_command(f"chat {msg}")
-            self.entry_chat.delete(0, tk.END)
+            try:
+                # Sempre envia no formato correto "chat mensagem"
+                self.socket.send(f"chat {msg}".encode())
+                self.entry_chat.delete(0, tk.END)
+            except Exception as e:
+                self.display_message(f"Erro ao enviar mensagem: {e}")
 
     def receive_messages(self):
         while True:
@@ -107,9 +111,50 @@ class SeegaClient:
                 msg = self.socket.recv(2048).decode()
                 if not msg:
                     break
-                self.display_message(msg)
-            except:
-                self.display_message("Conexão encerrada pelo servidor.")
+
+                linhas = msg.split('\n')
+                for linha in linhas:
+                    linha = linha.strip()
+                    if not linha:
+                        continue
+
+                    # Aqui a gente filtra e só mostra o que interessa
+                    if linha.startswith("Seu turno!"):
+                        self.display_message("🎯 Sua vez!")
+                    elif "Aguarde" in linha:
+                        self.display_message("⏳ Aguardando adversário...")
+                    elif "desistiu" in linha:
+                        if "Você" in linha:
+                            self.display_message("🚪 Você saiu.")
+                        else:
+                            self.display_message("🚪 Jogador adversário saiu.")
+                    elif "Fim do jogo" in linha:
+                        self.display_message("🏁 Fim de jogo.")
+                    elif linha.startswith("[Chat]"):
+                        self.display_message(f"💬 {linha}")
+                    elif (linha.startswith("Peça colocada") or
+                        linha.startswith("Movimento realizado") or
+                        "Movimento deve ser para uma casa adjacente" in linha or
+                        "Casa já ocupada" in linha or
+                        "Destino inválido" in linha or
+                        "Você só pode mover suas próprias peças" in linha or
+                        "Posição inválida" in linha or
+                        "Ainda estamos na fase de colocação." in linha):
+                        self.display_message(f"🎮 {linha}")
+                    else:
+                        # Ignorar tudo que for tabuleiro e outras mensagens
+                        pass
+
+                # Atualiza o tabuleiro visual separadamente
+                if "Tabuleiro atual:" in msg:
+                    self.update_board(msg)
+
+                # Detecta mudança de fase
+                if "Fase de movimentação iniciada" in msg:
+                    self.phase = 'movement'
+
+            except Exception as e:
+                self.display_message(f"⚠️ Erro de conexão: {e}")
                 break
 
 def main():
