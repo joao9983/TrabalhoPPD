@@ -18,7 +18,10 @@ class SeegaClient:
         self.entry_chat.grid(row=2, column=0, padx=10, pady=(0,5), sticky="w")
 
         self.button_send_chat = tk.Button(master, text="Enviar Chat", command=self.send_chat)
-        self.button_send_chat.grid(row=2, column=0, padx=10, pady=(0,5), sticky="e")
+        self.button_send_chat.grid(row=2, column=0, padx=(10,2), pady=(0,5), sticky="e")
+
+        self.button_resign = tk.Button(master, text="Desistir", command=self.resign)
+        self.button_resign.grid(row=2, column=1, padx=(2,10), pady=(0,5), sticky="w")
 
         self.buttons = []
         for y in range(5):
@@ -128,8 +131,8 @@ class SeegaClient:
                             self.display_message("🚪 Você saiu.")
                         else:
                             self.display_message("🚪 Jogador adversário saiu.")
-                    elif "Fim do jogo" in linha:
-                        self.display_message("🏁 Fim de jogo.")
+                    elif "Fim do jogo" in linha or "venceu" in linha:
+                        self.display_message(f"🏁 {linha}")
                     elif linha.startswith("[Chat]"):
                         self.display_message(f"💬 {linha}")
                     elif (linha.startswith("Peça colocada") or
@@ -156,6 +159,14 @@ class SeegaClient:
             except Exception as e:
                 self.display_message(f"⚠️ Erro de conexão: {e}")
                 break
+            
+    def resign(self):
+        try:
+            self.socket.send("exit".encode())
+            self.display_message("Você desistiu da partida.")
+            self.master.quit()
+        except Exception as e:
+            self.display_message(f"Erro ao desistir: {e}")
 
 def main():
     root = tk.Tk()

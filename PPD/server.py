@@ -42,12 +42,11 @@ def handle_client(conn, addr, player_id):
                 if msg.startswith("chat "):
                     chat_msg = msg[5:].strip()
                     if chat_msg:
-                        for idx, c in enumerate(clients):
-                            if idx != player_id:
-                                try:
-                                    c.send(f"[Chat] Jogador {player_symbols[player_id]}: {chat_msg}\n".encode())
-                                except:
-                                    pass
+                        for c in clients:
+                            try:
+                                c.send(f"[Chat] Jogador {player_symbols[player_id]}: {chat_msg}\n".encode())
+                            except:
+                                pass
                         conn.send("Mensagem enviada!\n".encode())
                     else:
                         conn.send("Mensagem de chat vazia.\n".encode())
@@ -69,7 +68,7 @@ def handle_client(conn, addr, player_id):
                 elif msg.startswith("move"):
                     try:
                         _, x1, y1, x2, y2 = msg.split()
-                        success, response = game.move_piece(int(x1), int(y1), int(x2, y2))
+                        success, response = game.move_piece(int(x1), int(y1), int(x2), int(y2))
                     except ValueError:
                         conn.send("Comando inválido. Use: move x1 y1 x2 y2\n".encode())
                         continue
@@ -93,18 +92,11 @@ def handle_client(conn, addr, player_id):
                 # Manda resposta apenas para quem jogou
                 conn.send(f"\n🎮 {response}\n".encode())
 
-                # Manda aviso para o adversário
-                other_player_id = 1 - player_id
-                other_conn = clients[other_player_id]
-                try:
-                    other_conn.send("\n🎯 Seu adversário jogou. Sua vez!\n".encode())
-                except:
-                    pass
-
                 # Atualiza o tabuleiro para ambos
                 send_board()
 
                 if "Fim do jogo!" in response:
+                    broadcast(f"🏁 Fim do jogo!\n")
                     for c in clients:
                         try:
                             c.shutdown(socket.SHUT_RDWR)
@@ -112,7 +104,16 @@ def handle_client(conn, addr, player_id):
                         except:
                             pass
                     return
-
+                
+                # Manda aviso para o adversário
+                other_player_id = 1 - player_id
+                other_conn = clients[other_player_id]
+                try:
+                    other_conn.send("\n🎯 Seu adversário jogou. Sua vez!\n".encode())
+                except:
+                    pass
+                
+                
         except Exception as e:
             print(f"Erro com cliente {addr}: {e}")
             break
