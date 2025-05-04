@@ -25,7 +25,8 @@ def send_board():
     broadcast(f"\nTabuleiro atual:\n{board_str}\n")
 
 def handle_client(conn, addr, player_id):
-    conn.send(f"Você é o jogador {player_symbols[player_id]}\n".encode())
+    conn.send(f"Você é o jogador {player_symbols[player_id]}.\n".encode())  # Mensagem indicando o jogador
+    print(f"[DEBUG] Mensagem enviada para {addr}: Você é o jogador {player_symbols[player_id]}.")
 
     if player_symbols[player_id] != game.current_player:
         conn.send("Aguardue pelo outro jogador...\n".encode())
@@ -110,9 +111,9 @@ def handle_client(conn, addr, player_id):
                 other_conn = clients[other_player_id]
                 try:
                     other_conn.send("\n🎯 Seu adversário jogou. Sua vez!\n".encode())
+                    print(f"[DEBUG] Mensagem enviada para jogador {player_symbols[other_player_id]}: Sua vez!")
                 except:
                     pass
-                
                 
         except Exception as e:
             print(f"Erro com cliente {addr}: {e}")
@@ -134,6 +135,8 @@ def main():
         threading.Thread(target=handle_client, args=(conn, addr, len(clients)-1)).start()
 
     print("Dois jogadores conectados. Jogo iniciado.")
+    broadcast(f"Jogo iniciado! Jogador {game.current_player} começa a partida.\n")  # Envia mensagem para ambos
+    print(f"[DEBUG] Mensagem de início enviada: Jogador {game.current_player} começa a partida.")
     send_board()
 
 if __name__ == "__main__":

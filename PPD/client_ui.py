@@ -62,6 +62,14 @@ class SeegaClient:
         if "Fase de movimentação iniciada" in msg:
             self.phase = 'movement'
 
+        # Exibe quem começa e de quem é a vez
+        if "Jogo iniciado!" in msg:
+            self.chat_area.insert(tk.END, f"🎲 {msg.strip()}\n")  # Exibe mensagem de início
+        elif "Seu adversário jogou" in msg:
+            self.chat_area.insert(tk.END, "🎯 Sua vez!\n")
+        elif "Aguarde seu turno" in msg:
+            self.chat_area.insert(tk.END, "⏳ Aguardando adversário...\n")
+
     def update_board(self, msg):
         linhas = msg.split("\n")
         tab = []
@@ -121,28 +129,34 @@ class SeegaClient:
                     if not linha:
                         continue
 
-                    # Aqui a gente filtra e só mostra o que interessa
-                    if linha.startswith("Seu turno!"):
-                        self.display_message("🎯 Sua vez!")
-                    elif "Aguarde" in linha:
+                    # Exibe a mensagem indicando o jogador
+                    if linha.startswith("Você é o jogador"):
+                        self.display_message(f"🎮 {linha}")
+                    elif linha.startswith("Jogo iniciado!"):
+                        self.display_message(f"🎲 {linha}")
+                    elif linha.startswith("Seu adversário jogou"):
+                        self.display_message("🎯 Sua vez!")  # Exibe mensagem de "Sua vez!"
+                    elif linha.startswith("🎯 Seu adversário jogou. Sua vez!"):  # Ajuste para capturar a mensagem exata
+                        self.display_message("🎯 Sua vez!")  # Exibe mensagem de "Sua vez!"
+                    elif "Aguarde seu turno" in linha:
                         self.display_message("⏳ Aguardando adversário...")
                     elif "desistiu" in linha:
                         if "Você" in linha:
                             self.display_message("🚪 Você saiu.")
                         else:
-                            self.display_message("🚪 Jogador adversário saiu.")
+                            self.display_message("🚪 Jogador adversário saiu. Você venceu!!")
                     elif "Fim do jogo" in linha or "venceu" in linha:
                         self.display_message(f"🏁 {linha}")
                     elif linha.startswith("[Chat]"):
                         self.display_message(f"💬 {linha}")
                     elif (linha.startswith("Peça colocada") or
-                        linha.startswith("Movimento realizado") or
-                        "Movimento deve ser para uma casa adjacente" in linha or
-                        "Casa já ocupada" in linha or
-                        "Destino inválido" in linha or
-                        "Você só pode mover suas próprias peças" in linha or
-                        "Posição inválida" in linha or
-                        "Ainda estamos na fase de colocação." in linha):
+                          linha.startswith("Movimento realizado") or
+                          "Movimento deve ser para uma casa adjacente" in linha or
+                          "Casa já ocupada" in linha or
+                          "Destino inválido" in linha or
+                          "Você só pode mover suas próprias peças" in linha or
+                          "Posição inválida" in linha or
+                          "Ainda estamos na fase de colocação." in linha):
                         self.display_message(f"🎮 {linha}")
                     else:
                         # Ignorar tudo que for tabuleiro e outras mensagens
