@@ -5,8 +5,7 @@ import time
 from game.board import Board
 
 
-HOST = 'localhost'
-PORT = 5555
+HOST = ''
 
 clients = []
 player_symbols = ['X', 'O']
@@ -124,9 +123,12 @@ def handle_client(conn, addr, player_id):
 
 def main():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind((HOST, PORT))
+    s.bind((HOST, 0))  # Porta automática
+    port = s.getsockname()[1]
+    with open("server_port.txt", "w") as f:
+        f.write(str(port))
     s.listen(2)
-    print("Servidor aguardando 2 jogadores...")
+    print(f"Servidor aguardando 2 jogadores na porta {port}...")
 
     while len(clients) < 2:
         conn, addr = s.accept()

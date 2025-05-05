@@ -2,11 +2,18 @@ import socket
 import threading
 import tkinter as tk
 from tkinter import scrolledtext
+import tkinter.simpledialog
 
 class SeegaClient:
     def __init__(self, master):
         self.master = master
         master.title("Seega - Cliente")
+
+        # Pergunta o IP do servidor ao usuário
+        self.host = tk.simpledialog.askstring("Endereço do Servidor", "Digite o IP do servidor:", initialvalue="localhost")
+        if not self.host:
+            self.display_message("Nenhum endereço informado.")
+            return
 
         self.board_frame = tk.Frame(master)
         self.board_frame.grid(row=0, column=0, padx=10, pady=10)
@@ -34,8 +41,12 @@ class SeegaClient:
             self.buttons.append(row)
 
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.host = 'localhost'
-        self.port = 5555
+        try:
+            with open("server_port.txt", "r") as f:
+                self.port = int(f.read().strip())
+        except Exception as e:
+            self.display_message(f"Erro ao obter porta do servidor: {e}")
+            return
 
         self.selected = None  # Armazena peça selecionada para mover
         self.phase = 'placement'  # Começa na fase de colocação
@@ -135,14 +146,16 @@ class SeegaClient:
                     elif linha.startswith("Jogo iniciado!"):
                         self.display_message(f"🎲 {linha}")
                     elif linha.startswith("Seu adversário jogou"):
-                        self.display_message("🎯 Sua vez!")  # Exibe mensagem de "Sua vez!"
-                    elif linha.startswith("🎯 Seu adversário jogou. Sua vez!"):  # Ajuste para capturar a mensagem exata
-                        self.display_message("🎯 Sua vez!")  # Exibe mensagem de "Sua vez!"
+                        self.display_message("🎯 Sua vez!")
+                    elif linha.startswith("🎯 Seu adversário jogou. Sua vez!"):
+                        self.display_message("🎯 Sua vez!")
                     elif "Aguarde seu turno" in linha:
                         self.display_message("⏳ Aguardando adversário...")
                     elif "desistiu" in linha:
                         if "Você" in linha:
                             self.display_message("🚪 Você saiu.")
+                            if hasattr(self, 'resigning') and self.resigning:
+                                self.master.quit()
                         else:
                             self.display_message("🚪 Jogador adversário saiu. Você venceu!!")
                     elif "Fim do jogo" in linha or "venceu" in linha:
@@ -159,14 +172,11 @@ class SeegaClient:
                           "Ainda estamos na fase de colocação." in linha):
                         self.display_message(f"🎮 {linha}")
                     else:
-                        # Ignorar tudo que for tabuleiro e outras mensagens
                         pass
 
-                # Atualiza o tabuleiro visual separadamente
                 if "Tabuleiro atual:" in msg:
                     self.update_board(msg)
 
-                # Detecta mudança de fase
                 if "Fase de movimentação iniciada" in msg:
                     self.phase = 'movement'
 
@@ -177,8 +187,8 @@ class SeegaClient:
     def resign(self):
         try:
             self.socket.send("exit".encode())
-            self.display_message("Você desistiu da partida.")
-            self.master.quit()
+            self.display_message("Solicitando desistência...")
+            self.resigning = True  # Flag para fechar ao receber confirmação
         except Exception as e:
             self.display_message(f"Erro ao desistir: {e}")
 
