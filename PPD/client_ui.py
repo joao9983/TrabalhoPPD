@@ -1,18 +1,24 @@
-import socket
-import threading
+import xmlrpc.client
 import tkinter as tk
 from tkinter import scrolledtext
 import tkinter.simpledialog
+import threading
+import time
 
 class SeegaClient:
     def __init__(self, master):
         self.master = master
         master.title("Seega - Cliente")
 
-        # Pergunta o IP do servidor ao usuário
-        self.host = tk.simpledialog.askstring("Endereço do Servidor", "Digite o IP do servidor:", initialvalue="localhost")
-        if not self.host:
+        self.server_url = tk.simpledialog.askstring("Endereço do Servidor", "Digite o endereço do servidor (ex: http://localhost:8000):", initialvalue="http://localhost:8000")
+        if not self.server_url:
             self.display_message("Nenhum endereço informado.")
+            return
+
+        self.server = xmlrpc.client.ServerProxy(self.server_url, allow_none=True)
+        self.player_id, self.symbol = self.server.join_game()
+        if self.player_id == -1:
+            self.display_message("Jogo já está cheio!")
             return
 
         self.board_frame = tk.Frame(master)
@@ -40,24 +46,19 @@ class SeegaClient:
                 row.append(btn)
             self.buttons.append(row)
 
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            with open("server_port.txt", "r") as f:
-                self.port = int(f.read().strip())
-        except Exception as e:
-            self.display_message(f"Erro ao obter porta do servidor: {e}")
-            return
-
-        self.selected = None  # Armazena peça selecionada para mover
-        self.phase = 'placement'  # Começa na fase de colocação
-
-        try:
-            self.socket.connect((self.host, self.port))
-        except Exception as e:
-            self.display_message(f"Erro ao conectar no servidor: {e}")
-            return
-
-        threading.Thread(target=self.receive_messages, daemon=True).start()
+        self.selected = None
+        self.phase = 'placement'
+        self.running = True
+        self.turn = self.symbol == 'X'  # X sempre começa
+        self.display_message(f"Você é o jogador {self.symbol}.")
+        if self.symbol == 'X':
+            self.display_message("Você começa a partida!")
+        else:
+            self.display_message("Aguarde o jogador X começar.")
+        self.last_turn_state = None  # Para evitar spam de 'Sua vez!'
+        self.awaiting_server = False  # Para bloquear interface após jogada
+        self.polling_lock = threading.Lock()
+        threading.Thread(target=self.poll_server, daemon=True).start()
 
     def display_message(self, msg):
         self.chat_area.config(state="normal")
@@ -65,132 +66,107 @@ class SeegaClient:
         self.chat_area.config(state="disabled")
         self.chat_area.yview(tk.END)
 
-        # Atualiza tabuleiro se vier nova configuração
-        if "Tabuleiro atual:" in msg:
-            self.update_board(msg)
-
-        # Detecta mudança de fase
-        if "Fase de movimentação iniciada" in msg:
-            self.phase = 'movement'
-
-        # Exibe quem começa e de quem é a vez
-        if "Jogo iniciado!" in msg:
-            self.chat_area.insert(tk.END, f"🎲 {msg.strip()}\n")  # Exibe mensagem de início
-        elif "Seu adversário jogou" in msg:
-            self.chat_area.insert(tk.END, "🎯 Sua vez!\n")
-        elif "Aguarde seu turno" in msg:
-            self.chat_area.insert(tk.END, "⏳ Aguardando adversário...\n")
-
-    def update_board(self, msg):
-        linhas = msg.split("\n")
-        tab = []
-        start = False
-        for linha in linhas:
-            if start:
-                if linha.strip() == "":
-                    break
-                tab.append(linha.split())
-            if "Tabuleiro atual:" in linha:
-                start = True
-        if tab:
-            for y in range(5):
-                for x in range(5):
-                    text = tab[y][x]
-                    if text == '.':
-                        text = " "
-                    self.buttons[y][x].config(text=text)
+    def update_board(self, board_str):
+        linhas = board_str.strip().split("\n")
+        for y in range(5):
+            for x in range(5):
+                text = linhas[y].split()[x]
+                if text == '.':
+                    text = " "
+                self.buttons[y][x].config(text=text)
 
     def handle_click(self, x, y):
-        if self.phase == 'placement':
-            self.send_command(f"place {x} {y}")
-        elif self.phase == 'movement':
-            if self.selected:
-                from_x, from_y = self.selected
-                self.send_command(f"move {from_x} {from_y} {x} {y}")
-                self.selected = None
-            else:
-                self.selected = (x, y)
-
-    def send_command(self, cmd):
+        # Primeiro, verifica se é o turno do jogador
         try:
-            self.socket.send(cmd.encode())
+            with self.polling_lock:
+                state = self.server.get_game_state(self.player_id)
         except Exception as e:
-            self.display_message(f"Erro ao enviar comando: {e}")
+            self.display_message(f"Erro de conexão: {e}")
+            return
+        if state['current_player'] != self.symbol:
+            self.display_message("Aguarde seu turno!")
+            return
+        # Depois, verifica se está aguardando resposta do servidor
+        if self.awaiting_server:
+            self.display_message("Aguarde o servidor responder sua última jogada.")
+            return
+        self.awaiting_server = True
+        try:
+            with self.polling_lock:
+                if self.phase == 'placement':
+                    success, resp = self.server.place_piece(self.player_id, x, y)
+                    self.display_message(resp)
+                    state = self.server.get_game_state(self.player_id)
+                    self.update_board(state['board'])
+                elif self.phase == 'movement':
+                    if self.selected:
+                        from_x, from_y = self.selected
+                        success, resp = self.server.move_piece(self.player_id, from_x, from_y, x, y)
+                        self.display_message(resp)
+                        state = self.server.get_game_state(self.player_id)
+                        self.update_board(state['board'])
+                        self.selected = None
+                    else:
+                        self.selected = (x, y)
+        finally:
+            self.awaiting_server = False
 
     def send_chat(self):
         msg = self.entry_chat.get().strip()
         if msg:
             try:
-                # Sempre envia no formato correto "chat mensagem"
-                self.socket.send(f"chat {msg}".encode())
-                self.entry_chat.delete(0, tk.END)
+                with self.polling_lock:
+                    self.server.send_chat(self.player_id, msg)
+                # Não exibe imediatamente no chat local para evitar duplicidade
             except Exception as e:
                 self.display_message(f"Erro ao enviar mensagem: {e}")
+            self.entry_chat.delete(0, tk.END)
 
-    def receive_messages(self):
-        while True:
+    def poll_server(self):
+        last_board = None
+        last_chat = []
+        while self.running:
             try:
-                msg = self.socket.recv(2048).decode()
-                if not msg:
+                with self.polling_lock:
+                    state = self.server.get_game_state(self.player_id)
+                if state['board'] != last_board:
+                    self.update_board(state['board'])
+                    last_board = state['board']
+                if state['phase'] != self.phase:
+                    self.phase = state['phase']
+                    self.display_message(f"Fase atual: {self.phase}")
+                # Exibe todas as mensagens novas do chat
+                for msg in state['chat']:
+                    if msg not in last_chat:
+                        self.display_message(msg)
+                last_chat = state['chat'][:]
+                # Atualiza info de turno
+                is_my_turn = (state['current_player'] == self.symbol)
+                if is_my_turn != self.last_turn_state:
+                    if is_my_turn:
+                        self.display_message("Sua vez!")
+                    self.last_turn_state = is_my_turn
+                # Libera interface para jogar só se for o turno do jogador
+                self.awaiting_server = not is_my_turn
+                if state['winner']:
+                    self.display_message(state['winner'])
+                    self.running = False
                     break
-
-                linhas = msg.split('\n')
-                for linha in linhas:
-                    linha = linha.strip()
-                    if not linha:
-                        continue
-
-                    # Exibe a mensagem indicando o jogador
-                    if linha.startswith("Você é o jogador"):
-                        self.display_message(f"🎮 {linha}")
-                    elif linha.startswith("Jogo iniciado!"):
-                        self.display_message(f"🎲 {linha}")
-                    elif linha.startswith("Seu adversário jogou"):
-                        self.display_message("🎯 Sua vez!")
-                    elif linha.startswith("🎯 Seu adversário jogou. Sua vez!"):
-                        self.display_message("🎯 Sua vez!")
-                    elif "Aguarde seu turno" in linha:
-                        self.display_message("⏳ Aguardando adversário...")
-                    elif "desistiu" in linha:
-                        if "Você" in linha:
-                            self.display_message("🚪 Você saiu.")
-                            if hasattr(self, 'resigning') and self.resigning:
-                                self.master.quit()
-                        else:
-                            self.display_message("🚪 Jogador adversário saiu. Você venceu!!")
-                    elif "Fim do jogo" in linha or "venceu" in linha:
-                        self.display_message(f"🏁 {linha}")
-                    elif linha.startswith("[Chat]"):
-                        self.display_message(f"💬 {linha}")
-                    elif (linha.startswith("Peça colocada") or
-                          linha.startswith("Movimento realizado") or
-                          "Movimento deve ser para uma casa adjacente" in linha or
-                          "Casa já ocupada" in linha or
-                          "Destino inválido" in linha or
-                          "Você só pode mover suas próprias peças" in linha or
-                          "Posição inválida" in linha or
-                          "Ainda estamos na fase de colocação." in linha):
-                        self.display_message(f"🎮 {linha}")
-                    else:
-                        pass
-
-                if "Tabuleiro atual:" in msg:
-                    self.update_board(msg)
-
-                if "Fase de movimentação iniciada" in msg:
-                    self.phase = 'movement'
-
+                if state['resigned'][self.player_id]:
+                    self.display_message("Você desistiu.")
+                    self.running = False
+                    break
+                time.sleep(1)
             except Exception as e:
-                self.display_message(f"⚠️ Erro de conexão: {e}")
-                break
-            
+                self.display_message(f"Erro de conexão: {e}")
+                time.sleep(2)  # Espera e tenta novamente
+                continue
+
     def resign(self):
-        try:
-            self.socket.send("exit".encode())
-            self.display_message("Solicitando desistência...")
-            self.resigning = True  # Flag para fechar ao receber confirmação
-        except Exception as e:
-            self.display_message(f"Erro ao desistir: {e}")
+        self.server.resign(self.player_id)
+        self.display_message("Solicitando desistência...")
+        self.running = False
+        self.master.quit()
 
 def main():
     root = tk.Tk()

@@ -38,39 +38,30 @@ class Board:
             return True, "Peça colocada com sucesso."
 
     def move_piece(self, from_x, from_y, to_x, to_y):
-        # Checa se estamos na fase de movimentação
         if self.phase != 'movement':
             return False, "Ainda estamos na fase de colocação."
 
-        # Checa se as coordenadas estão no tabuleiro
         if not self._is_valid_cell(from_x, from_y) or not self._is_valid_cell(to_x, to_y):
             return False, "Posição fora do tabuleiro."
 
-        # Checa se a peça na origem é do jogador atual
         if self.board[from_y][from_x] != self.current_player:
             return False, "Você só pode mover suas próprias peças."
 
-        # Checa se a casa de destino está livre
         if self.board[to_y][to_x] != self.EMPTY:
             return False, "Destino inválido (não está vazio)."
 
-        # Checa se o movimento é para uma casa adjacente (sem diagonais)
         if not self._is_adjacent(from_x, from_y, to_x, to_y):
             return False, "Movimento deve ser para uma casa adjacente (sem diagonais)."
 
-        # Realiza o movimento: remove a peça da origem e coloca no destino
         self.board[to_y][to_x] = self.current_player
         self.board[from_y][from_x] = self.EMPTY
 
-        # Verifica se houve captura (remover peça adversária)
         self._check_captures(to_x, to_y)
 
-        # Verifica se o jogo acabou (por vitória ou falta de peças)
         winner, reason = self._check_winner()
         if winner:
             return True, f"Jogador {winner} venceu! {reason} Fim do jogo!"
 
-        # Troca o turno para o outro jogador
         self._switch_turn()
         return True, "Movimento realizado com sucesso."
 
@@ -108,6 +99,10 @@ class Board:
                     print(f"Captura realizada! Peça adversária removida de ({nx}, {ny})")
 
     def _check_winner(self):
+        # Só verifica vitória se já estiver na fase de movimentação
+        if self.phase != 'movement':
+            return None, None
+
         p1_moves = self._has_moves(self.PLAYER1)
         p2_moves = self._has_moves(self.PLAYER2)
 
