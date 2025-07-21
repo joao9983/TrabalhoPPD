@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: location_chat_rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"    # AMQP port
+      - "15672:15672"  # Management UI port
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin123
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ../config/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    networks:
+      - chat_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Opcional: Container para a aplicação (para desenvolvimento)
+  location-chat-app:
+    build: .
+    container_name: location_chat_app
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_USER=admin
+      - RABBITMQ_PASS=admin123
+    volumes:
+      - ./:/app
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw  # Para GUI no Linux
+    networks:
+      - chat_network
+    # Note: GUI apps need special setup for Docker
+    # It's recommended to run the app locally and only RabbitMQ in Docker
+    profiles:
+      - full-stack
+
+volumes:
+  rabbitmq_data:
+    driver: local
+
+networks:
+  chat_network:
+    driver: bridge

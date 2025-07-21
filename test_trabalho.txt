@@ -1,0 +1,321 @@
+// filepath: c:\Users\joaoc\Documents\TrabalhoPPD\test_trabalho.txt
+TESTES PARA O SISTEMA DE COMUNICAÇÃO BASEADO EM LOCALIZAÇÃO
+Instituto Federal do Ceará - Programação Paralela e Distribuída
+
+=== CONFIGURAÇÃO DO AMBIENTE DE TESTES ===
+
+ANTES DE EXECUTAR OS TESTES:
+
+1. Execute o script de configuração:
+   ```
+   python setup_tests.py
+   ```
+
+2. No menu, escolha:
+   - Opção 1: Limpar TUDO (para começar do zero)
+   - Opção 2: Criar usuários base para testes
+   - Opção 3: Verificar status do sistema
+
+3. Estrutura de arquivos após configuração:
+   ```
+   TrabalhoPPD/
+   ├── users/                    ← Nova pasta para usuários
+   │   ├── user_data_João.json
+   │   ├── user_data_Maria.json
+   │   ├── user_data_Pedro.json
+   │   ├── user_data_Ana.json
+   │   └── user_data_Carlos.json
+   ├── setup_tests.py           ← Script de configuração
+   └── ...outros arquivos
+   ```
+
+=== CONFIGURAÇÃO INICIAL DE USUÁRIOS PARA TESTES ===
+
+USUÁRIOS BASE CRIADOS AUTOMATICAMENTE:
+
+Usuário 1:
+- Nome: "João"
+- Latitude: -3.7327 (Fortaleza Centro)
+- Longitude: -38.5267
+- Status: ONLINE
+- Raio: 1000 metros
+- Arquivo: users/user_data_João.json
+
+Usuário 2:
+- Nome: "Maria"
+- Latitude: -3.7400 (Fortaleza - 850m do João)
+- Longitude: -38.5300
+- Status: ONLINE
+- Raio: 1000 metros
+- Arquivo: users/user_data_Maria.json
+
+Usuário 3:
+- Nome: "Pedro"
+- Latitude: -3.7500 (Fortaleza - 1.5km do João)
+- Longitude: -38.5400
+- Status: OFFLINE
+- Raio: 500 metros
+- Arquivo: users/user_data_Pedro.json
+
+Usuário 4:
+- Nome: "Ana"
+- Latitude: -3.7200 (Fortaleza - 1.8km do João)
+- Longitude: -38.5100
+- Status: ONLINE
+- Raio: 2000 metros
+- Arquivo: users/user_data_Ana.json
+
+Usuário 5:
+- Nome: "Carlos"
+- Latitude: -3.7327 (Mesma localização do João)
+- Longitude: -38.5267
+- Status: OFFLINE
+- Raio: 1500 metros
+- Arquivo: users/user_data_Carlos.json
+
+OBSERVAÇÕES:
+- ✅ Todos os arquivos são salvos na pasta 'users/'
+- ✅ Script de configuração limpa automaticamente RabbitMQ e arquivos antigos
+- ✅ Use setup_tests.py para gerenciar o ambiente de testes
+- ✅ Para o TESTE 15 (Stress Test), usar o script para criar mais usuários
+- ✅ Verificar status do sistema com a opção 3 do script
+
+=== TESTE 2: ATUALIZAÇÃO DE LOCALIZAÇÃO ===
+Objetivo: Verificar se a localização do usuário pode ser atualizada
+
+Entrada:
+- Usuário existente: "João"
+- Nova latitude: -3.7500
+- Nova longitude: -38.5400
+
+Resultado esperado:
+- Localização atualizada com sucesso
+- Coordenadas antigas substituídas pelas novas
+
+=== TESTE 3: ATUALIZAÇÃO DE STATUS ===
+Objetivo: Verificar mudança de status online/offline
+
+Entrada:
+- Usuário "João" muda de ONLINE para OFFLINE
+
+Resultado esperado:
+- Status atualizado para OFFLINE
+- Usuário não disponível para comunicação síncrona
+
+=== TESTE 4: CÁLCULO DE DISTÂNCIA ===
+Objetivo: Verificar se o cálculo de distância entre usuários está correto
+
+Entrada:
+- Usuário A: Lat -3.7327, Long -38.5267
+- Usuário B: Lat -3.7400, Long -38.5300
+- Raio de comunicação: 1000 metros
+
+Resultado esperado:
+- Distância calculada corretamente (aproximadamente 850 metros)
+- Usuários dentro do raio de comunicação
+
+=== TESTE 5: DESCOBERTA DE CONTATOS ===
+Objetivo: Verificar se novos contatos são descobertos automaticamente
+
+Entrada:
+- Usuário A move-se para próximo do Usuário B
+- Ambos estão ONLINE
+- Distância entre eles: 500 metros
+- Raio de comunicação: 1000 metros
+
+Resultado esperado:
+- Usuário B adicionado automaticamente à lista de contatos do Usuário A
+- Usuário A adicionado automaticamente à lista de contatos do Usuário B
+
+=== TESTE 6: COMUNICAÇÃO SÍNCRONA - SUCESSO ===
+Objetivo: Verificar comunicação síncrona entre usuários online e dentro do raio
+
+Entrada:
+- Usuário A (ONLINE) envia mensagem para Usuário B (ONLINE)
+- Distância: 500 metros
+- Raio: 1000 metros
+
+Resultado esperado:
+- Mensagem entregue imediatamente via socket/RPC
+- Usuário B recebe mensagem em tempo real
+
+=== TESTE 7: COMUNICAÇÃO SÍNCRONA - FALHA POR DISTÂNCIA ===
+Objetivo: Verificar que comunicação síncrona falha quando usuários estão fora do raio
+
+Entrada:
+- Usuário A (ONLINE) tenta enviar mensagem para Usuário B (ONLINE)
+- Distância: 2000 metros
+- Raio: 1000 metros
+
+Resultado esperado:
+- Comunicação síncrona negada
+- Mensagem enviada para fila assíncrona
+
+=== TESTE 8: COMUNICAÇÃO SÍNCRONA - FALHA POR STATUS ===
+Objetivo: Verificar que comunicação síncrona falha quando usuário está offline
+
+Entrada:
+- Usuário A (ONLINE) tenta enviar mensagem para Usuário B (OFFLINE)
+- Distância: 500 metros
+- Raio: 1000 metros
+
+Resultado esperado:
+- Comunicação síncrona negada
+- Mensagem enviada para fila assíncrona
+
+=== TESTE 9: COMUNICAÇÃO ASSÍNCRONA ===
+Objetivo: Verificar funcionamento da fila de mensagens
+
+Entrada:
+- Usuário A envia mensagem para Usuário B (OFFLINE)
+- Mensagem: "Olá, como está?"
+
+Resultado esperado:
+- Mensagem armazenada na fila do MOM
+- Mensagem não entregue imediatamente
+
+=== TESTE 10: ENTREGA DE MENSAGENS ASSÍNCRONAS ===
+Objetivo: Verificar entrega de mensagens quando usuário fica online
+
+Entrada:
+- Usuário B (anteriormente OFFLINE) muda status para ONLINE
+- Possui mensagens pendentes na fila
+
+Resultado esperado:
+- Todas as mensagens pendentes são entregues
+- Fila do usuário é limpa após entrega
+
+=== TESTE 11: MÚLTIPLAS MENSAGENS ASSÍNCRONAS ===
+Objetivo: Verificar acúmulo e entrega de múltiplas mensagens
+
+Entrada:
+- Usuário A envia 3 mensagens para Usuário B (OFFLINE)
+- Usuário C envia 2 mensagens para Usuário B (OFFLINE)
+- Usuário B fica ONLINE
+
+Resultado esperado:
+- Todas as 5 mensagens são entregues na ordem correta
+- Histórico de mensagens preservado
+
+=== TESTE 12: ATUALIZAÇÃO DE RAIO DE COMUNICAÇÃO ===
+Objetivo: Verificar mudança do raio de comunicação
+
+Entrada:
+- Usuário A com raio inicial: 1000 metros
+- Atualização para: 500 metros
+- Usuário B a 750 metros de distância
+
+Resultado esperado:
+- Raio atualizado para 500 metros
+- Usuário B removido da lista de contatos próximos
+- Comunicação síncrona não permitida
+
+=== TESTE 13: REMOÇÃO AUTOMÁTICA DE CONTATOS ===
+Objetivo: Verificar remoção de contatos que saem do raio
+
+Entrada:
+- Usuário A e B estão conectados (distância: 500m, raio: 1000m)
+- Usuário B move-se para 1500 metros de distância
+
+Resultado esperado:
+- Usuário B removido da lista de contatos próximos do Usuário A
+- Comunicação síncrona não mais disponível
+
+=== TESTE 14: LISTA DE CONTATOS ===
+Objetivo: Verificar gerenciamento da lista de contatos
+
+Entrada:
+- Usuário A com 5 contatos na lista
+- 3 contatos dentro do raio (ONLINE)
+- 2 contatos fora do raio
+
+Resultado esperado:
+- Lista mostra todos os 5 contatos
+- Indica quais estão disponíveis para comunicação síncrona
+- Mostra status e distância de cada contato
+
+=== TESTE 15: STRESS TEST - MÚLTIPLOS USUÁRIOS ===
+Objetivo: Verificar comportamento com muitos usuários simultâneos
+
+Entrada:
+- 50 usuários criados
+- Movimentação aleatória
+- Envio de mensagens simultâneas
+
+Resultado esperado:
+- Sistema mantém performance aceitável
+- Todas as mensagens são entregues corretamente
+- Não há perda de dados
+
+=== TESTE 16: PERSISTÊNCIA DE DADOS ===
+Objetivo: Verificar se dados são mantidos durante execução
+
+Entrada:
+- Criar usuário com mensagens pendentes
+- Simular queda de conexão
+- Reconectar usuário
+
+Resultado esperado:
+- Mensagens pendentes preservadas
+- Status e localização mantidos
+- Lista de contatos intacta
+
+=== TESTE 17: PROTOCOLO DE COMUNICAÇÃO ===
+Objetivo: Verificar se o protocolo (sockets/RPC) funciona corretamente
+
+Entrada:
+- Estabelecer conexão entre dois clientes
+- Enviar mensagem de teste
+- Verificar formato da mensagem
+
+Resultado esperado:
+- Conexão estabelecida com sucesso
+- Mensagem transmitida no formato correto
+- Acknowledgment recebido
+
+=== TESTE 18: MIDDLEWARE ORIENTADO A MENSAGENS ===
+Objetivo: Verificar funcionamento do MOM
+
+Entrada:
+- Múltiplos produtores de mensagens
+- Múltiplos consumidores
+- Filas separadas por usuário
+
+Resultado esperado:
+- Mensagens roteadas para filas corretas
+- Ordem FIFO preservada
+- Não há mistura de mensagens entre usuários
+
+=== TESTE 19: INTERFACE DO USUÁRIO ===
+Objetivo: Verificar usabilidade da interface
+
+Entrada:
+- Navegar por todas as funcionalidades
+- Enviar mensagens via interface
+- Atualizar configurações
+
+Resultado esperado:
+- Interface responsiva e intuitiva
+- Todas as funcionalidades acessíveis
+- Feedback visual adequado
+
+=== TESTE 20: TRATAMENTO DE ERROS ===
+Objetivo: Verificar robustez do sistema
+
+Entrada:
+- Coordenadas inválidas
+- Usuário inexistente
+- Mensagem vazia
+- Raio negativo
+
+Resultado esperado:
+- Erros tratados graciosamente
+- Mensagens de erro informativas
+- Sistema não trava ou corrompe dados
+
+CRITÉRIOS DE SUCESSO:
+- Todos os testes devem passar
+- Performance aceitável (< 2 segundos para operações básicas)
+- Interface funcional e intuitiva
+- Código bem documentado e organizado
+- Protocolo de comunicação bem definido
