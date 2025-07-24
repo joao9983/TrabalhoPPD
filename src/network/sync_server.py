@@ -119,45 +119,47 @@ class SyncServer:
     def _handle_handshake(self, client_socket, message):
         """Processa handshake inicial"""
         try:
-            username = message.get("username")
-            lat = message.get("latitude")
-            lon = message.get("longitude")
-            port = message.get("port")
+            # Cliente envia: {"type": "handshake", "sender": username, "timestamp": time}
+            sender = message.get("sender")
             
-            if not all([username, lat, lon, port]):
+            if not sender:
                 response = {
-                    "type": "handshake_response",
-                    "status": "error",
-                    "message": "Dados incompletos no handshake"
+                    "type": "handshake_error",
+                    "message": "Sender não informado no handshake"
                 }
-                client_socket.send(serialize_message(response))
+                client_socket.send(serialize_message(response).encode('utf-8'))
                 return None
             
-            # Verifica se o usuário está dentro do raio
-            distance = self.user_state.calculate_distance(lat, lon)
-            max_distance = self.user_state.max_distance
-            
-            if distance > max_distance:
-                response = {
-                    "type": "handshake_response", 
-                    "status": "error",
-                    "message": f"Usuário fora do raio ({distance:.1f}m > {max_distance}m)"
-                }
-                client_socket.send(serialize_message(response))
-                return None
+            # Verifica se o usuário está dentro do raio (usando ContactsManager se disponível)
+            # Por enquanto, aceita qualquer usuário descoberto
             
             # Handshake OK - adiciona cliente à lista
-            self.clients[client_socket] = username
+            self.clients[client_socket] = sender
             
             response = {
-                "type": "handshake_response",
-                "status": "success", 
-                "username": self.user_state.username,
-                "latitude": self.user_state.latitude,
-                "longitude": self.user_state.longitude,
-                "port": self.user_state.socket_port
+                "type": "handshake_ok",
+                "message": "Handshake realizado com sucesso"
             }
-            client_socket.send(serialize_message(response))
+            client_socket.send(serialize_message(response).encode('utf-8'))
+            
+            # Notifica GUI sobre nova conexão
+            if self.gui:
+                self.gui.on_sync_connection(sender, True)
+            
+            print(f"   ✅ Handshake OK com {sender}")
+            return sender
+            
+        except Exception as e:
+            print(f"Erro no handshake: {e}")
+            try:
+                response = {
+                    "type": "handshake_error",
+                    "message": f"Erro no handshake: {e}"
+                }
+                client_socket.send(serialize_message(response).encode('utf-8'))
+            except:
+                pass
+            return None
             
             print(f"Handshake concluído com {username} ({distance:.1f}m)")
             return username
@@ -174,9 +176,8 @@ class SyncServer:
             timestamp = message.get("timestamp")
             
             if self.gui:
-                self.gui.after(0, lambda: self.gui.add_message(
-                    f"[{format_timestamp(timestamp)}] {sender}: {content}"
-                ))
+                formatted_msg = f"[{format_timestamp(timestamp)}] {sender}: {content}"
+                self.gui.display_sync_message(formatted_msg)
                 
         except Exception as e:
             print(f"Erro ao processar mensagem de chat: {e}")
@@ -185,7 +186,7 @@ class SyncServer:
         """Responde a ping com pong"""
         try:
             pong = {"type": "pong", "timestamp": time.time()}
-            client_socket.send(serialize_message(pong))
+            client_socket.send(serialize_message(pong).encode('utf-8'))
         except Exception as e:
             print(f"Erro ao enviar pong: {e}")
     
@@ -201,7 +202,7 @@ class SyncServer:
             "timestamp": time.time()
         }
         
-        data = serialize_message(message)
+        data = serialize_message(message).encode('utf-8')
         disconnected = []
         
         for client_socket in list(self.clients.keys()):

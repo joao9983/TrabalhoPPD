@@ -7,11 +7,34 @@ import threading
 import time
 import pika
 import os
+import sys
 from dotenv import load_dotenv
 from utils.utils import calculate_distance, get_queue_name, validate_coordinates
 
 # Carrega variáveis de ambiente do arquivo .env
 load_dotenv('config/.env')
+
+# Configurações RabbitMQ centralizadas
+class RabbitMQConfig:
+    HOST = os.getenv('RABBITMQ_HOST', 'localhost')
+    USERNAME = os.getenv('RABBITMQ_USER', 'admin')
+    PASSWORD = os.getenv('RABBITMQ_PASS', 'admin123')
+    HEARTBEAT = 300
+    BLOCKED_CONNECTION_TIMEOUT = 300
+    CONNECTION_ATTEMPTS = 3
+    RETRY_DELAY = 2
+    
+    @classmethod
+    def get_connection_parameters(cls):
+        credentials = pika.PlainCredentials(cls.USERNAME, cls.PASSWORD)
+        return pika.ConnectionParameters(
+            host=cls.HOST,
+            credentials=credentials,
+            heartbeat=cls.HEARTBEAT,
+            blocked_connection_timeout=cls.BLOCKED_CONNECTION_TIMEOUT,
+            connection_attempts=cls.CONNECTION_ATTEMPTS,
+            retry_delay=cls.RETRY_DELAY
+        )
 
 class ContactsManager:
     def __init__(self, user_state):
@@ -23,25 +46,12 @@ class ContactsManager:
         self.connection = None
         self.channel = None
         
-        # Configurações RabbitMQ
-        self.host = os.getenv('RABBITMQ_HOST', 'localhost')
-        self.username = os.getenv('RABBITMQ_USER', 'admin')
-        self.password = os.getenv('RABBITMQ_PASS', 'admin123')
-        
         self._connect_rabbitmq()
     
     def _connect_rabbitmq(self):
-        """Conecta ao RabbitMQ com tratamento de erro"""
+        """Conecta ao RabbitMQ com tratamento de erro melhorado"""
         try:
-            credentials = pika.PlainCredentials(self.username, self.password)
-            parameters = pika.ConnectionParameters(
-                host=self.host, 
-                credentials=credentials,
-                heartbeat=600,
-                blocked_connection_timeout=300
-            )
-            
-            self.connection = pika.BlockingConnection(parameters)
+            self.connection = pika.BlockingConnection(RabbitMQConfig.get_connection_parameters())
             self.channel = self.connection.channel()
             
             # Declara exchange para descoberta de usuários
@@ -54,15 +64,26 @@ class ContactsManager:
             self.channel = None
     
     def _ensure_connection(self):
-        """Garante que a conexão está ativa"""
+        """Garante que a conexão está ativa com melhor robustez"""
         try:
             if not self.connection or self.connection.is_closed:
+                print("📡 Reconectando ContactsManager...")
                 self._connect_rabbitmq()
             elif not self.channel or self.channel.is_closed:
+                print("📡 Recriando canal ContactsManager...")
                 self.channel = self.connection.channel()
                 self.channel.exchange_declare(exchange='user_discovery', exchange_type='fanout', durable=False)
-            return True
-        except:
+            
+            # Testa se a conexão está realmente funcionando
+            if self.connection and self.channel:
+                # Faz um ping simples para verificar se está ok
+                self.connection.process_data_events(time_limit=0.1)
+                return True
+            return False
+        except Exception as e:
+            print(f"⚠️ Erro ao garantir conexão: {e}")
+            self.connection = None
+            self.channel = None
             return False
     
     def start_discovery(self):
@@ -98,7 +119,10 @@ class ContactsManager:
     
     def _broadcast_position(self):
         """Envia broadcast com a posição atual do usuário"""
-        if not self._ensure_connection() or self.user_state.status == "offline":
+        if self.user_state.status == "offline":
+            return
+            
+        if not self._ensure_connection():
             return
             
         try:
@@ -124,53 +148,62 @@ class ContactsManager:
             
         except Exception as e:
             print(f"⚠️ Erro ao enviar broadcast: {e}")
+            # Marca conexão como inválida para forçar reconexão
             self.connection = None
             self.channel = None
     
     def _listen_discovery(self):
-        """Escuta broadcasts de outros usuários"""
-        if not self._ensure_connection():
-            return
-            
-        try:
-            # Cria fila temporária para receber broadcasts
-            result = self.channel.queue_declare(queue='', exclusive=True)
-            queue_name = result.method.queue
-            
-            self.channel.queue_bind(exchange='user_discovery', queue=queue_name)
-            
-            def callback(ch, method, properties, body):
-                try:
-                    import json
-                    message = json.loads(body.decode())
-                    self._process_discovery_message(message)
-                except Exception as e:
-                    print(f"⚠️ Erro ao processar mensagem de descoberta: {e}")
-            
-            self.channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
-            
-            while self.running:
-                try:
-                    if self.connection and not self.connection.is_closed:
-                        self.connection.process_data_events(time_limit=1)
-                    else:
-                        print("📡 Reconectando listener de descoberta...")
-                        if not self._ensure_connection():
-                            time.sleep(5)
-                            continue
-                        # Recriar queue após reconexão
-                        result = self.channel.queue_declare(queue='', exclusive=True)
-                        queue_name = result.method.queue
-                        self.channel.queue_bind(exchange='user_discovery', queue=queue_name)
-                        self.channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
-                except Exception as e:
-                    print(f"⚠️ Erro no listener, tentando reconectar: {e}")
+        """Escuta broadcasts de outros usuários com melhor recuperação de erro"""
+        max_retries = 3
+        retry_count = 0
+        
+        while self.running and retry_count < max_retries:
+            try:
+                if not self._ensure_connection():
+                    print("📡 Falha ao conectar listener de descoberta, tentando novamente...")
                     time.sleep(5)
-                    
-        except Exception as e:
-            print(f"❌ Erro no listener de descoberta: {e}")
-            self.connection = None
-            self.channel = None
+                    retry_count += 1
+                    continue
+                
+                # Reset contador de tentativas após conexão bem-sucedida
+                retry_count = 0
+                
+                # Cria fila temporária para receber broadcasts
+                result = self.channel.queue_declare(queue='', exclusive=True)
+                queue_name = result.method.queue
+                
+                self.channel.queue_bind(exchange='user_discovery', queue=queue_name)
+                
+                def callback(ch, method, properties, body):
+                    try:
+                        import json
+                        message = json.loads(body.decode())
+                        self._process_discovery_message(message)
+                    except Exception as e:
+                        print(f"⚠️ Erro ao processar mensagem de descoberta: {e}")
+                
+                self.channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
+                
+                # Loop principal do listener
+                while self.running:
+                    try:
+                        if self.connection and not self.connection.is_closed:
+                            self.connection.process_data_events(time_limit=1)
+                        else:
+                            print("📡 Conexão perdida no listener, tentando reconectar...")
+                            break  # Sai do loop interno para tentar reconectar
+                            
+                    except Exception as e:
+                        print(f"⚠️ Erro no listener: {e}")
+                        break  # Sai do loop interno para tentar reconectar
+                        
+            except Exception as e:
+                print(f"❌ Erro no listener de descoberta: {e}")
+                retry_count += 1
+                time.sleep(5)
+                
+        if retry_count >= max_retries:
+            print("❌ Listener de descoberta falhou após múltiplas tentativas")
     
     def _process_discovery_message(self, message):
         """Processa mensagem de descoberta recebida"""

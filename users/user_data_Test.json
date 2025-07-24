@@ -1,0 +1,22 @@
+{
+  "username": "test",
+  "latitude": -23.55,
+  "longitude": -46.6333,
+  "radius": 1000.0,
+  "status": "online",
+  "contacts": {
+    "tr]": {
+      "latitude": -23.5505,
+      "longitude": -46.6333,
+      "status": "online",
+      "last_seen": null
+    },
+    "jc": {
+      "latitude": -23.5505,
+      "longitude": -46.6333,
+      "status": "online",
+      "last_seen": null
+    }
+  },
+  "socket_port": 8626
+}

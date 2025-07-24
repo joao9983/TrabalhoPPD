@@ -14,6 +14,28 @@ from utils.utils import deserialize_message, get_queue_name, format_timestamp
 # Carrega variáveis de ambiente do arquivo .env
 load_dotenv('config/.env')
 
+# Configurações RabbitMQ centralizadas
+class RabbitMQConfig:
+    HOST = os.getenv('RABBITMQ_HOST', 'localhost')
+    USERNAME = os.getenv('RABBITMQ_USER', 'admin')
+    PASSWORD = os.getenv('RABBITMQ_PASS', 'admin123')
+    HEARTBEAT = 300
+    BLOCKED_CONNECTION_TIMEOUT = 300
+    CONNECTION_ATTEMPTS = 3
+    RETRY_DELAY = 2
+    
+    @classmethod
+    def get_connection_parameters(cls):
+        credentials = pika.PlainCredentials(cls.USERNAME, cls.PASSWORD)
+        return pika.ConnectionParameters(
+            host=cls.HOST,
+            credentials=credentials,
+            heartbeat=cls.HEARTBEAT,
+            blocked_connection_timeout=cls.BLOCKED_CONNECTION_TIMEOUT,
+            connection_attempts=cls.CONNECTION_ATTEMPTS,
+            retry_delay=cls.RETRY_DELAY
+        )
+
 class AsyncConsumer:
     def __init__(self, username, gui):
         self.username = username
@@ -23,23 +45,13 @@ class AsyncConsumer:
         self.consuming = False
         self.consumer_thread = None
         self.queue_name = get_queue_name(username)
+        self.auto_check_timer = None
+        self.auto_check_enabled = False
         
     def _connect(self):
-        """Conecta ao RabbitMQ"""
+        """Conecta ao RabbitMQ com melhor tratamento de erro"""
         try:
-            host = os.getenv('RABBITMQ_HOST', 'localhost')
-            username = os.getenv('RABBITMQ_USER', 'admin')
-            password = os.getenv('RABBITMQ_PASS', 'admin123')
-            
-            credentials = pika.PlainCredentials(username, password)
-            parameters = pika.ConnectionParameters(
-                host=host, 
-                credentials=credentials,
-                heartbeat=600,
-                blocked_connection_timeout=300
-            )
-            
-            self.connection = pika.BlockingConnection(parameters)
+            self.connection = pika.BlockingConnection(RabbitMQConfig.get_connection_parameters())
             self.channel = self.connection.channel()
             
             # Declara a fila do usuário
@@ -103,19 +115,34 @@ class AsyncConsumer:
             return False
     
     def _consume_loop(self):
-        """Loop principal de consumo"""
+        """Loop principal de consumo com melhor recuperação de erro"""
+        retry_count = 0
+        max_retries = 5
+        
         try:
-            while self.consuming and self.connection and not self.connection.is_closed:
+            while self.consuming and retry_count < max_retries:
                 try:
+                    if not self.connection or self.connection.is_closed:
+                        print("Conexão perdida, tentando reconectar...")
+                        if self._reconnect():
+                            retry_count = 0  # Reset contador após reconexão bem-sucedida
+                        else:
+                            retry_count += 1
+                            time.sleep(5)
+                            continue
+                    
+                    # Processa eventos de dados
                     self.connection.process_data_events(time_limit=1)
-                except pika.exceptions.AMQPConnectionError:
-                    print("Conexão perdida, tentando reconectar...")
-                    if self.consuming:
-                        time.sleep(5)
-                        self._reconnect()
+                    
+                except pika.exceptions.AMQPConnectionError as e:
+                    print(f"Erro de conexão AMQP: {e}")
+                    retry_count += 1
+                    time.sleep(5)
+                    
                 except Exception as e:
                     print(f"Erro no loop de consumo: {e}")
-                    break
+                    retry_count += 1
+                    time.sleep(2)
                     
         except Exception as e:
             print(f"Erro fatal no consumidor: {e}")
@@ -123,20 +150,32 @@ class AsyncConsumer:
             print("Loop de consumo encerrado")
     
     def _reconnect(self):
-        """Tenta reconectar ao RabbitMQ"""
+        """Tenta reconectar ao RabbitMQ com melhor tratamento"""
         try:
+            # Fecha conexão anterior se existir
             if self.connection and not self.connection.is_closed:
-                self.connection.close()
+                try:
+                    self.connection.close()
+                except:
+                    pass
         except:
             pass
         
+        # Tenta reconectar
         if self._connect() and self.consuming:
-            self.channel.basic_consume(
-                queue=self.queue_name,
-                on_message_callback=self._process_message,
-                auto_ack=False
-            )
-            print("Reconectado com sucesso")
+            try:
+                self.channel.basic_consume(
+                    queue=self.queue_name,
+                    on_message_callback=self._process_message,
+                    auto_ack=False
+                )
+                print("Reconectado com sucesso")
+                return True
+            except Exception as e:
+                print(f"Erro ao reconfigurar consumidor após reconexão: {e}")
+                return False
+        
+        return False
     
     def _process_message(self, ch, method, properties, body):
         """Processa mensagem recebida"""
@@ -189,42 +228,68 @@ class AsyncConsumer:
             self.gui.display_async_message(formatted_msg)
     
     def _listen_broadcasts(self):
-        """Escuta broadcasts de localização e status"""
-        if not self.connection:
-            return
+        """Escuta broadcasts de localização e status com melhor recuperação"""
+        max_retries = 3
+        retry_count = 0
         
-        try:
-            # Cria canal separado para broadcasts
-            broadcast_channel = self.connection.channel()
-            
-            # Configura exchanges para diferentes tipos de broadcast
-            exchanges = ['location_broadcast', 'status_updates', 'user_discovery']
-            
-            for exchange in exchanges:
-                broadcast_channel.exchange_declare(exchange=exchange, exchange_type='fanout')
+        while self.consuming and retry_count < max_retries:
+            try:
+                if not self.connection or self.connection.is_closed:
+                    print("🔄 Reconectando listener de broadcasts...")
+                    if not self._connect():
+                        retry_count += 1
+                        time.sleep(5)
+                        continue
                 
-                # Cria fila temporária para receber broadcasts
-                result = broadcast_channel.queue_declare(queue='', exclusive=True)
-                temp_queue = result.method.queue
+                # Reset contador após conexão bem-sucedida
+                retry_count = 0
                 
-                broadcast_channel.queue_bind(exchange=exchange, queue=temp_queue)
+                # Cria canal separado para broadcasts
+                broadcast_channel = self.connection.channel()
                 
-                # Configura callback
-                broadcast_channel.basic_consume(
-                    queue=temp_queue,
-                    on_message_callback=self._process_broadcast,
-                    auto_ack=True
-                )
-            
-            # Loop de escuta de broadcasts
-            while self.consuming and self.connection and not self.connection.is_closed:
-                try:
-                    self.connection.process_data_events(time_limit=1)
-                except:
-                    break
-                    
-        except Exception as e:
-            print(f"Erro ao escutar broadcasts: {e}")
+                # Configura exchanges para diferentes tipos de broadcast
+                exchanges = ['location_broadcast', 'status_updates', 'user_discovery']
+                temp_queues = []
+                
+                for exchange in exchanges:
+                    try:
+                        broadcast_channel.exchange_declare(exchange=exchange, exchange_type='fanout')
+                        
+                        # Cria fila temporária para receber broadcasts
+                        result = broadcast_channel.queue_declare(queue='', exclusive=True)
+                        temp_queue = result.method.queue
+                        temp_queues.append(temp_queue)
+                        
+                        broadcast_channel.queue_bind(exchange=exchange, queue=temp_queue)
+                        
+                        # Configura callback
+                        broadcast_channel.basic_consume(
+                            queue=temp_queue,
+                            on_message_callback=self._process_broadcast,
+                            auto_ack=True
+                        )
+                    except Exception as e:
+                        print(f"⚠️ Erro ao configurar exchange {exchange}: {e}")
+                
+                # Loop de escuta de broadcasts
+                while self.consuming:
+                    try:
+                        if self.connection and not self.connection.is_closed:
+                            self.connection.process_data_events(time_limit=1)
+                        else:
+                            print("🔄 Conexão de broadcast perdida, reconectando...")
+                            break
+                    except Exception as e:
+                        print(f"⚠️ Erro no loop de broadcasts: {e}")
+                        break
+                        
+            except Exception as e:
+                print(f"Erro ao escutar broadcasts: {e}")
+                retry_count += 1
+                time.sleep(5)
+                
+        if retry_count >= max_retries:
+            print("❌ Listener de broadcasts falhou após múltiplas tentativas")
     
     def _process_broadcast(self, ch, method, properties, body):
         """Processa broadcasts recebidos"""
@@ -298,6 +363,39 @@ class AsyncConsumer:
         
         return messages_consumed
     
+    def start_auto_check_when_online(self):
+        """Inicia verificação automática de mensagens quando usuário está online"""
+        if not self.auto_check_enabled:
+            self.auto_check_enabled = True
+            self._schedule_auto_check()
+    
+    def stop_auto_check_when_offline(self):
+        """Para verificação automática quando usuário não está online"""
+        self.auto_check_enabled = False
+        if self.auto_check_timer:
+            try:
+                self.auto_check_timer.cancel()
+                self.auto_check_timer = None
+            except:
+                pass
+    
+    def _schedule_auto_check(self):
+        """Agenda próxima verificação automática"""
+        if self.auto_check_enabled and self.gui:
+            # Verifica se há mensagens pendentes e processa automaticamente
+            try:
+                count = self.consume_pending_messages()
+                if count > 0:
+                    print(f"🔄 [AUTO] Processadas {count} mensagem(s) para usuário online")
+            except Exception as e:
+                print(f"⚠️ Erro na verificação automática: {e}")
+            
+            # Agenda próxima verificação em 3 segundos
+            if self.auto_check_enabled:
+                self.auto_check_timer = threading.Timer(3.0, self._schedule_auto_check)
+                self.auto_check_timer.daemon = True
+                self.auto_check_timer.start()
+    
     def get_queue_message_count(self):
         """Retorna número de mensagens na fila"""
         if not self.channel:
@@ -312,6 +410,9 @@ class AsyncConsumer:
     def stop(self):
         """Para o consumidor"""
         self.consuming = False
+        
+        # Para verificação automática
+        self.stop_auto_check_when_offline()
         
         try:
             if self.channel:

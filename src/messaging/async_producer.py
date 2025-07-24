@@ -13,54 +13,66 @@ from utils.utils import create_message, serialize_message, get_queue_name
 # Carrega variáveis de ambiente do arquivo .env
 load_dotenv('config/.env')
 
+# Configurações RabbitMQ centralizadas
+class RabbitMQConfig:
+    HOST = os.getenv('RABBITMQ_HOST', 'localhost')
+    USERNAME = os.getenv('RABBITMQ_USER', 'admin')
+    PASSWORD = os.getenv('RABBITMQ_PASS', 'admin123')
+    HEARTBEAT = 300
+    BLOCKED_CONNECTION_TIMEOUT = 300
+    CONNECTION_ATTEMPTS = 3
+    RETRY_DELAY = 2
+    
+    @classmethod
+    def get_connection_parameters(cls):
+        credentials = pika.PlainCredentials(cls.USERNAME, cls.PASSWORD)
+        return pika.ConnectionParameters(
+            host=cls.HOST,
+            credentials=credentials,
+            heartbeat=cls.HEARTBEAT,
+            blocked_connection_timeout=cls.BLOCKED_CONNECTION_TIMEOUT,
+            connection_attempts=cls.CONNECTION_ATTEMPTS,
+            retry_delay=cls.RETRY_DELAY
+        )
+
 class AsyncProducer:
     def __init__(self, user_state):
         self.user_state = user_state
         self.connection = None
         self.channel = None
         
-        # Configurações RabbitMQ
-        self.host = os.getenv('RABBITMQ_HOST', 'localhost')
-        self.username = os.getenv('RABBITMQ_USER', 'admin')
-        self.password = os.getenv('RABBITMQ_PASS', 'admin123')
-        
         self._connect()
     
     def _connect(self):
-        """Conecta ao RabbitMQ"""
+        """Conecta ao RabbitMQ com melhor tratamento de erro"""
         try:
-            credentials = pika.PlainCredentials(self.username, self.password)
-            parameters = pika.ConnectionParameters(
-                host=self.host,
-                credentials=credentials,
-                heartbeat=600,
-                blocked_connection_timeout=300
-            )
-            
-            self.connection = pika.BlockingConnection(parameters)
+            self.connection = pika.BlockingConnection(RabbitMQConfig.get_connection_parameters())
             self.channel = self.connection.channel()
-            print(f"✅ Produtor conectado ao RabbitMQ em {self.host}")
+            print(f"✅ Produtor conectado ao RabbitMQ em {RabbitMQConfig.HOST}")
         except Exception as e:
             print(f"❌ Erro ao conectar produtor ao RabbitMQ: {e}")
             self.connection = None
             self.channel = None
     
     def _ensure_connection(self):
-        """Garante que a conexão está ativa"""
+        """Garante que a conexão está ativa com melhor robustez"""
         try:
             if not self.connection or self.connection.is_closed:
+                print("🔄 Reconectando produtor...")
                 self._connect()
             elif not self.channel or self.channel.is_closed:
+                print("🔄 Recriando canal do produtor...")
                 self.channel = self.connection.channel()
-            return self.connection and self.channel and not self.connection.is_closed
-        except:
+            
+            # Testa se a conexão está realmente funcionando
+            if self.connection and self.channel:
+                return not self.connection.is_closed
             return False
-    
-    def _ensure_connection(self):
-        """Garante que a conexão está ativa"""
-        if not self.connection or self.connection.is_closed:
-            self._connect()
-        return self.connection and self.channel
+        except Exception as e:
+            print(f"⚠️ Erro ao garantir conexão do produtor: {e}")
+            self.connection = None
+            self.channel = None
+            return False
     
     def send_async_message(self, recipient, content, message_type="direct"):
         """Envia mensagem assíncrona para a fila do destinatário"""
@@ -96,6 +108,7 @@ class AsyncProducer:
             
         except Exception as e:
             print(f"❌ Erro ao enviar mensagem assíncrona: {e}")
+            # Marca conexão como inválida para forçar reconexão
             self.connection = None
             self.channel = None
             return False, f"Erro: {e}"
@@ -152,7 +165,10 @@ class AsyncProducer:
             self.channel.basic_publish(
                 exchange='status_updates',
                 routing_key='',
-                body=json.dumps(status_data)
+                body=json.dumps(status_data),
+                properties=pika.BasicProperties(
+                    delivery_mode=1  # Non-persistent
+                )
             )
             
             return True

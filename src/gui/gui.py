@@ -29,7 +29,22 @@ class ChatGUI:
         self.selected_contact = tk.StringVar()
         self.current_chat_user = None
         
+        # Controle de usuários descobertos para evitar spam
+        self.discovered_users = set()
+        
         self._setup_login()
+    
+    def _safe_after(self, delay, callback, *args):
+        """Método auxiliar para chamadas thread-safe ao root.after"""
+        if hasattr(self, 'root') and self.root:
+            self.root.after(delay, callback, *args)
+        else:
+            # Se ainda não tem root, executa diretamente (pode ser arriscado, mas é fallback)
+            if delay == 0:
+                try:
+                    callback(*args)
+                except:
+                    pass
     
     def _setup_login(self):
         """Configura tela de login inicial"""
@@ -127,11 +142,18 @@ class ChatGUI:
         self.async_consumer = async_consumer
         
         # Inicializa clientes
-        self.sync_client = SyncClient(user_state, self)
+        self.sync_client = SyncClient(user_state, self, contacts_manager)
         self.async_producer = AsyncProducer(user_state)
         
         # Inicia descoberta de contatos
         self.contacts_manager.start_discovery()
+        
+        # Se iniciou como online, automaticamente processa mensagens offline (MOM pattern)
+        if user_state.status == "online":
+            # Delay para garantir que async_consumer está pronto
+            self.root.after(2000, self._auto_process_offline_messages)
+            # Inicia verificação automática contínua para usuário que começou online
+            self.root.after(3000, lambda: self.async_consumer.start_auto_check_when_online() if self.async_consumer else None)
     
     def _setup_main_interface(self):
         """Configura interface principal"""
@@ -278,7 +300,7 @@ class ChatGUI:
                  font=("Arial", 8)).pack(side='left', padx=5)
         tk.Button(btn_container, text="Desconectar Chat", command=self._disconnect_current_chat,
                  font=("Arial", 8)).pack(side='left', padx=5)
-        tk.Button(btn_container, text="Verificar Mensagens Offline", command=self._check_offline_messages,
+        tk.Button(btn_container, text="Verificar Msgs Offline", command=self._check_offline_messages,
                  font=("Arial", 8)).pack(side='left', padx=5)
     
     def _create_status_bar(self):
@@ -434,10 +456,24 @@ class ChatGUI:
             self.current_chat_user = None
     
     def _check_offline_messages(self):
-        """Verifica mensagens offline"""
+        """Verifica mensagens offline manualmente - só funciona quando NÃO está online"""
+        if not self.user_state:
+            messagebox.showerror("Erro", "Estado do usuário não disponível")
+            return
+        
+        # Só permite verificar mensagens offline quando não está online
+        if self.user_state.status == "online":
+            messagebox.showwarning("Aviso", "Verificação manual só disponível quando não estiver online.\nQuando online, mensagens são processadas automaticamente.")
+            return
+        
         if self.async_consumer:
             count = self.async_consumer.consume_pending_messages()
-            self._add_chat_message(f"[SISTEMA] {count} mensagem(s) offline processada(s)")
+            if count > 0:
+                self._add_chat_message(f"[MANUAL] {count} mensagem(s) offline processada(s)")
+            else:
+                self._add_chat_message("[SISTEMA] Nenhuma mensagem offline pendente")
+        else:
+            messagebox.showerror("Erro", "Consumidor não disponível")
     
     def _change_location(self):
         """Altera localização do usuário"""
@@ -488,14 +524,35 @@ class ChatGUI:
         if not self.user_state:
             return
         
+        old_status = self.user_state.status
+        
         if self.user_state.set_status(new_status):
             self._add_chat_message(f"[SISTEMA] Status alterado para: {new_status}")
+            
+            # Se mudou para online, automaticamente processa mensagens offline via MOM
+            if new_status == "online" and old_status != "online":
+                self._auto_process_offline_messages()
+                # Inicia verificação automática contínua para usuário online
+                if self.async_consumer:
+                    self.async_consumer.start_auto_check_when_online()
+            
+            # Se mudou para qualquer status diferente de online, para verificação automática
+            if new_status != "online" and old_status == "online":
+                if self.async_consumer:
+                    self.async_consumer.stop_auto_check_when_offline()
             
             # Envia broadcast de mudança de status
             if self.async_producer:
                 self.async_producer.send_status_update(new_status)
         else:
             messagebox.showerror("Erro", "Status inválido")
+    
+    def _auto_process_offline_messages(self):
+        """Automaticamente processa mensagens offline quando muda para status 'online' (MOM pattern)"""
+        if self.async_consumer:
+            count = self.async_consumer.consume_pending_messages()
+            if count > 0:
+                self._add_chat_message(f"[MOM] {count} mensagem(s) offline recebida(s) automaticamente")
     
     def _add_manual_contact(self):
         """Adiciona contato manualmente"""
@@ -549,28 +606,44 @@ class ChatGUI:
     # Métodos para callbacks dos componentes
     def display_sync_message(self, message):
         """Exibe mensagem síncrona (thread-safe)"""
-        self.root.after(0, self._add_chat_message, message)
+        self._safe_after(0, self._add_chat_message, message)
     
     def display_async_message(self, message):
         """Exibe mensagem assíncrona (thread-safe)"""
-        self.root.after(0, self._add_chat_message, message)
+        self._safe_after(0, self._add_chat_message, message)
     
     def on_sync_connection(self, username, connected):
         """Callback para conexão síncrona"""
-        status = "conectou" if connected else "desconectou"
-        self.root.after(0, self._add_chat_message, f"[SISTEMA] {username} {status}")
+        if connected:
+            status = "reconectou"
+            # Remove da lista de descobertos para que seja anunciado novamente
+            if username in self.discovered_users:
+                self.discovered_users.remove(username)
+        else:
+            status = "desconectou"
+            # Mantém na lista para não anunciar novamente se reconectar rapidamente
+        
+        self._safe_after(0, self._add_chat_message, f"[SISTEMA] {username} {status}")
     
     def on_location_update(self, username, lat, lon, status):
         """Callback para atualização de localização"""
         message = f"[SISTEMA] {username} atualizou localização: {lat:.4f}, {lon:.4f}"
-        self.root.after(0, self._add_chat_message, message)
+        self._safe_after(0, self._add_chat_message, message)
     
     def on_status_update(self, username, new_status):
         """Callback para mudança de status"""
         message = f"[SISTEMA] {username} alterou status para: {new_status}"
-        self.root.after(0, self._add_chat_message, message)
+        self._safe_after(0, self._add_chat_message, message)
     
     def on_user_discovered(self, username, lat, lon, status, port):
-        """Callback para descoberta de usuário"""
-        message = f"[SISTEMA] Usuário {username} descoberto ({status})"
-        self.root.after(0, self._add_chat_message, message)
+        """Callback para descoberta de usuário - evita spam mostrando apenas primeira descoberta"""
+        if username not in self.discovered_users:
+            self.discovered_users.add(username)
+            message = f"[SISTEMA] Usuário {username} descoberto ({status})"
+            self._safe_after(0, self._add_chat_message, message)
+    
+    def reset_discovered_users(self):
+        """Limpa a lista de usuários descobertos (útil para testes ou reset)"""
+        self.discovered_users.clear()
+        message = "[SISTEMA] Lista de usuários descobertos resetada"
+        self._safe_after(0, self._add_chat_message, message)

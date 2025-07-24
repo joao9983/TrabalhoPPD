@@ -10,9 +10,10 @@ import json
 from utils.utils import serialize_message, deserialize_message, format_timestamp, get_port_from_username
 
 class SyncClient:
-    def __init__(self, user_state, gui):
+    def __init__(self, user_state, gui, contacts_manager=None):
         self.user_state = user_state
         self.gui = gui
+        self.contacts_manager = contacts_manager
         self.connections = {}  # {username: connection_info}
         self.connection_threads = {}
         
@@ -21,13 +22,24 @@ class SyncClient:
         if username in self.connections:
             return True, "Já conectado a este usuário"
         
-        # Verifica se usuário está no raio
-        if not self.user_state.is_contact_in_range(username):
-            return False, "Usuário fora do raio de comunicação"
+        # Verifica se usuário está disponível usando ContactsManager
+        if self.contacts_manager:
+            available = self.contacts_manager.is_contact_online_and_in_range(username)
+            if not available:
+                return False, "Usuário fora do raio de comunicação ou offline"
+        else:
+            # Fallback para verificação do user_state
+            available = self.user_state.is_contact_in_range(username)
+            if not available:
+                return False, "Usuário fora do raio de comunicação"
         
         try:
             # Obtém porta do usuário
-            contact_info = self.user_state.contacts.get(username)
+            if self.contacts_manager:
+                contact_info = self.contacts_manager.get_contact_info(username)
+            else:
+                contact_info = self.user_state.contacts.get(username)
+                
             if contact_info:
                 port = contact_info.get("port", get_port_from_username(username))
             else:
@@ -49,13 +61,20 @@ class SyncClient:
             
             client_socket.send(serialize_message(handshake_msg).encode('utf-8'))
             
-            # Aguarda confirmação
+            # Aguarda confirmação com timeout maior
+            client_socket.settimeout(15)  # 15 segundos para resposta
             response_data = client_socket.recv(1024).decode('utf-8')
             response = deserialize_message(response_data)
             
-            if not response or response.get("type") != "handshake_ok":
+            if not response or response.get("type") not in ["handshake_ok", "handshake_response"]:
                 client_socket.close()
-                error_msg = response.get("message", "Falha no handshake") if response else "Sem resposta"
+                error_msg = response.get("message", "Resposta inválida") if response else "Sem resposta"
+                return False, f"Erro na conexão: {error_msg}"
+            
+            # Verifica se houve erro no handshake
+            if response.get("type") == "handshake_error":
+                client_socket.close()
+                error_msg = response.get("message", "Erro no handshake")
                 return False, f"Erro na conexão: {error_msg}"
             
             # Armazena conexão

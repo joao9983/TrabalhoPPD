@@ -59,36 +59,47 @@ class MainApp:
             return False
     
     def initialize_components(self, username, latitude, longitude, radius):
-        """Inicializa todos os componentes do sistema"""
+        """Inicializa todos os componentes do sistema com delay entre componentes"""
         try:
             # Inicializa estado do usuário
             self.user_state = UserState(username, latitude, longitude, radius)
             
+            # Pequeno delay para estabilizar
+            import time
+            time.sleep(0.5)
+            
             # Inicializa gerenciador de contatos
             self.contacts_manager = ContactsManager(self.user_state)
+            time.sleep(0.5)
             
             # Inicializa servidor de comunicação síncrona
             self.sync_server = SyncServer(self.user_state, self.gui)
-            
-            # Inicializa consumidor de mensagens assíncronas
-            self.async_consumer = AsyncConsumer(username, self.gui)
             
             # Conecta componentes
             self.gui.set_components(
                 self.user_state, 
                 self.contacts_manager, 
                 self.sync_server, 
-                self.async_consumer
+                None  # async_consumer será definido depois
             )
             
-            # Inicia serviços
+            # Inicia discovery de contatos primeiro (menos crítico)
             print("🔄 Iniciando discovery de contatos...")
             self.contacts_manager.start_discovery()
+            time.sleep(1)  # Delay maior para permitir conexões se estabilizarem
             
+            # Inicia servidor TCP
             print("🔄 Iniciando servidor TCP...")
             self.sync_server.start()
+            time.sleep(0.5)
             
+            # Inicializa e inicia consumidor assíncrono por último
             print("🔄 Iniciando consumidor assíncrono...")
+            self.async_consumer = AsyncConsumer(username, self.gui)
+            
+            # Atualiza referência no GUI
+            self.gui.async_consumer = self.async_consumer
+            
             if not self.async_consumer.start():
                 print("⚠️ Falha ao iniciar consumidor, continuando sem ele...")
             
