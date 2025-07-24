@@ -79,9 +79,6 @@ function Start-RabbitMQ {
         Write-Host "  Usuario:         admin"
         Write-Host "  Senha:           admin123"
         Write-Host ""
-        Write-Host "Para testar:" -ForegroundColor Yellow
-        Write-Host "  python test_system.py"
-        Write-Host ""
         Write-Host "Para executar aplicacao:" -ForegroundColor Yellow
         Write-Host "  python main.py"
         Write-Host ""

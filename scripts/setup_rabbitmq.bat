@@ -52,8 +52,8 @@ echo URL: http://localhost:15672
 echo Usuário: guest
 echo Senha: guest
 echo.
-echo Para testar o sistema:
-echo python test_system.py
+echo Para executar o sistema:
+echo python main.py
 echo.
 
 :end
