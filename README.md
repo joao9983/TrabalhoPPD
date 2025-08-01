@@ -4,12 +4,6 @@ Sistema de chat em tempo real baseado em localização geográfica usando comuni
 
 ## 🚀 Como Executar
 
-### Opção 1: Automático
-```bash
-# Duplo clique no arquivo:
-INICIAR_SISTEMA.bat
-```
-
 ### Opção 2: Manual
 ```bash
 # 1. Iniciar RabbitMQ
